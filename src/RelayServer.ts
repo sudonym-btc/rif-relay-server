@@ -1,78 +1,81 @@
-import chalk from 'chalk';
-import log from 'loglevel';
 import {
-  IDeployVerifier__factory,
-  IRelayVerifier__factory,
-  IDeployVerifier,
-  IRelayVerifier,
-} from '@rsksmart/rif-relay-contracts';
+    estimateRelayMaxPossibleGas,
+    estimateRelayMaxPossibleGasNoSignature,
+  isDataEmpty,
+    isDeployRequest,
+    isDeployTransaction,
+    maxPossibleGasVerification,
+    RelayRequest,
+    SERVER_SIGNATURE_REQUIRED,
+    setProvider,
+    standardMaxPossibleGasEstimation,
+} from '@rsksmart/rif-relay-client';
 import type { TypedEvent } from '@rsksmart/rif-relay-contracts';
-import { replenishStrategy } from './ReplenishFunction';
+import {
+    IDeployVerifier,
+    IDeployVerifier__factory,
+    IRelayVerifier,
+    IRelayVerifier__factory,
+} from '@rsksmart/rif-relay-contracts';
+import chalk from 'chalk';
+import {
+    BigNumber,
+    constants,
+    Event,
+    PopulatedTransaction,
+    providers,
+    utils,
+} from 'ethers';
+import EventEmitter from 'events';
+import log from 'loglevel';
+import ow from 'ow';
+import { AmountRequired } from './AmountRequired';
+import type { HttpEnvelopingRequest, PastEventOptions } from './definitions';
+import {
+    populateDeployCallTransaction,
+    populateDeployVerifierTransaction,
+} from './deployRequestEncoding';
+import {
+    EVENT_REPLENISH_CHECK_REQUIRED,
+    registerEventHandlers,
+} from './events';
+import { getPastEventsForHub } from './getPastEventsForHub';
 import { RegistrationManager } from './RegistrationManager';
 import {
-  SendTransactionDetails,
-  SignedTransactionDetails,
-  TransactionManager,
-} from './TransactionManager';
+    calculateFee,
+    convertGasToTokenAndNative,
+    getAcceptedContractsFromVerifier,
+    getAcceptedTokensFromVerifier,
+    queryVerifiers,
+    validateExpirationTime,
+    validateIfGasAmountIsAcceptable,
+    validateIfTokenAmountIsAcceptable,
+} from './relayServerUtils';
+import { replenishStrategy } from './ReplenishFunction';
+import {
+    getServerConfig,
+    ServerConfigParams,
+    ServerDependencies,
+} from './ServerConfigParams';
 import { ServerAction } from './StoredTransaction';
+import {
+    SendTransactionDetails,
+    SignedTransactionDetails,
+    TransactionManager,
+} from './TransactionManager';
 import type { TxStoreManager } from './TxStoreManager';
 import {
-  ServerDependencies,
-  getServerConfig,
-  ServerConfigParams,
-} from './ServerConfigParams';
-import Timeout = NodeJS.Timeout;
-import EventEmitter from 'events';
-import {
-  utils,
-  constants,
-  Event,
-  PopulatedTransaction,
-  BigNumber,
-  providers,
-} from 'ethers';
-import ow from 'ow';
-import {
-  deployTransactionRequestShape,
-  getLatestEventData,
-  getProvider,
-  getRelayHub,
-  isContractDeployed,
-  randomInRange,
-  relayTransactionRequestShape,
-  sleep,
+    deployTransactionRequestShape,
+    getLatestEventData,
+    getProvider,
+    getRelayHub,
+    isContractDeployed,
+    randomInRange,
+    relayTransactionRequestShape,
+    sleep,
 } from './Utils';
-import { AmountRequired } from './AmountRequired';
-import {
-  RelayRequest,
-  estimateRelayMaxPossibleGas,
-  isDeployRequest,
-  isDeployTransaction,
-  maxPossibleGasVerification,
-  setProvider,
-  standardMaxPossibleGasEstimation,
-  estimateRelayMaxPossibleGasNoSignature,
-  SERVER_SIGNATURE_REQUIRED,
-  isDataEmpty,
-} from '@rsksmart/rif-relay-client';
-import {
-  validateIfGasAmountIsAcceptable,
-  validateIfTokenAmountIsAcceptable,
-  convertGasToTokenAndNative,
-  calculateFee,
-  validateExpirationTime,
-  queryVerifiers,
-  getAcceptedTokensFromVerifier,
-  getAcceptedContractsFromVerifier,
-} from './relayServerUtils';
-import { getPastEventsForHub } from './getPastEventsForHub';
-import type { PastEventOptions } from './definitions';
-import {
-  EVENT_REPLENISH_CHECK_REQUIRED,
-  registerEventHandlers,
-} from './events';
 import { SERVER_VERSION as version } from './version';
-import type { HttpEnvelopingRequest } from './definitions';
+import Timeout = NodeJS.Timeout;
 
 type HubInfo = {
   relayWorkerAddress: string;
@@ -362,12 +365,10 @@ export class RelayServer extends EventEmitter {
     try {
       let verifyMethod: PopulatedTransaction;
       if (isDeployTransaction(envelopingTransaction)) {
-        verifyMethod = await (
-          verifierContract as IDeployVerifier
-        ).populateTransaction.verifyRelayedCall(
-          envelopingTransaction.relayRequest,
-          envelopingTransaction.metadata.signature,
-          { from: this.workerAddress }
+        verifyMethod = populateDeployVerifierTransaction(
+          verifier,
+          envelopingTransaction,
+          this.workerAddress
         );
       } else {
         verifyMethod = await (
@@ -402,10 +403,16 @@ export class RelayServer extends EventEmitter {
     // the agreement signed between the client and the relayer. Take this into account during the Arbiter integration
 
     // Actual maximum gas needed to  send the relay transaction
-    const initialGasEstimation = await standardMaxPossibleGasEstimation(
-      envelopingTransaction,
-      this.workerAddress
-    );
+    const initialGasEstimation = isDeployTransaction(envelopingTransaction)
+      ? await this.transactionManager.attemptEstimateGas(
+          'deployCall',
+          populateDeployCallTransaction(envelopingTransaction),
+          this.workerAddress
+        )
+      : await standardMaxPossibleGasEstimation(
+          envelopingTransaction,
+          this.workerAddress
+        );
     log.debug(
       `Gas estimation before fees:  ${initialGasEstimation.toString()}`
     );
@@ -464,7 +471,19 @@ export class RelayServer extends EventEmitter {
     } = envelopingRequest;
 
     let initialGasEstimation: BigNumber;
-    if (signature === SERVER_SIGNATURE_REQUIRED || isDataEmpty(signature)) {
+    if (isDeployRequest(relayRequest)) {
+      initialGasEstimation =
+        signature === SERVER_SIGNATURE_REQUIRED || isDataEmpty(signature)
+          ? BigNumber.from(this.config.blockchain.defaultGasLimit)
+          : await this.transactionManager.attemptEstimateGas(
+              'deployCall',
+              populateDeployCallTransaction(envelopingRequest),
+              this.workerAddress
+            );
+    } else if (
+      signature === SERVER_SIGNATURE_REQUIRED ||
+      isDataEmpty(signature)
+    ) {
       const { workersKeyManager } = this.transactionManager;
       const signer = workersKeyManager.getWallet(this.workerAddress);
       initialGasEstimation = await estimateRelayMaxPossibleGasNoSignature(
@@ -566,7 +585,7 @@ export class RelayServer extends EventEmitter {
     } = envelopingTransaction;
 
     const method = isDeployRequest(relayRequest)
-      ? await relayHub.populateTransaction.deployCall(relayRequest, signature)
+      ? populateDeployCallTransaction(envelopingTransaction)
       : await relayHub.populateTransaction.relayCall(
           relayRequest as RelayRequest,
           signature

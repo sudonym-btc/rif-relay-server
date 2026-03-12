@@ -1,8 +1,9 @@
+import type { RelayManagerData } from '@rsksmart/rif-relay-client';
 import {
-  IRelayHub,
-  RelayHub,
-  RelayHub__factory,
-  TypedEvent,
+    IRelayHub,
+    RelayHub,
+    RelayHub__factory,
+    TypedEvent,
 } from '@rsksmart/rif-relay-contracts';
 import chalk from 'chalk';
 import config from 'config';
@@ -10,7 +11,6 @@ import { getDefaultProvider, providers, utils } from 'ethers';
 import { getAddress } from 'ethers/lib/utils';
 import ow from 'ow';
 import { getServerConfig } from './ServerConfigParams';
-import type { RelayManagerData } from '@rsksmart/rif-relay-client';
 
 const CONFIG_CONTRACTS = 'contracts';
 const CONFIG_BLOCKCHAIN = 'blockchain';
@@ -128,6 +128,7 @@ export const deployTransactionRequestShape = {
       from: ow.string,
       to: ow.string,
       value: ow.string,
+      gas: ow.string,
       nonce: ow.string,
       data: ow.string,
       tokenContract: ow.string,
