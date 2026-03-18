@@ -1,7 +1,7 @@
 import {
     estimateRelayMaxPossibleGas,
     estimateRelayMaxPossibleGasNoSignature,
-  isDataEmpty,
+    isDataEmpty,
     isDeployRequest,
     isDeployTransaction,
     maxPossibleGasVerification,
@@ -563,7 +563,10 @@ export class RelayServer extends EventEmitter {
 
     await this.validateRequestWithVerifier(envelopingTransaction);
 
-    await validateIfGasAmountIsAcceptable(envelopingTransaction);
+    await validateIfGasAmountIsAcceptable(
+      envelopingTransaction,
+      this.config.app
+    );
 
     const { maxPossibleGas, maxPossibleGasWithFee } =
       await this.getMaxPossibleGas(envelopingTransaction);
