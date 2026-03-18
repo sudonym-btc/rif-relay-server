@@ -1,6 +1,7 @@
 import {
   estimateRelayMaxPossibleGas,
   estimateRelayMaxPossibleGasNoSignature,
+  isDataEmpty,
   isDeployRequest,
   isDeployTransaction,
   maxPossibleGasVerification,
@@ -471,14 +472,18 @@ export class RelayServer extends EventEmitter {
 
     let initialGasEstimation: BigNumber;
     if (isDeployRequest(relayRequest)) {
-      initialGasEstimation = signature === SERVER_SIGNATURE_REQUIRED
-        ? BigNumber.from(this.config.blockchain.defaultGasLimit)
-        : await this.transactionManager.attemptEstimateGas(
-            'deployCall',
-            populateDeployCallTransaction(envelopingRequest),
-            this.workerAddress
-          );
-    } else if (signature === SERVER_SIGNATURE_REQUIRED) {
+      initialGasEstimation =
+        signature === SERVER_SIGNATURE_REQUIRED || isDataEmpty(signature)
+          ? BigNumber.from(this.config.blockchain.defaultGasLimit)
+          : await this.transactionManager.attemptEstimateGas(
+              'deployCall',
+              populateDeployCallTransaction(envelopingRequest),
+              this.workerAddress
+            );
+    } else if (
+      signature === SERVER_SIGNATURE_REQUIRED ||
+      isDataEmpty(signature)
+    ) {
       const { workersKeyManager } = this.transactionManager;
       const signer = workersKeyManager.getWallet(this.workerAddress);
       initialGasEstimation = await estimateRelayMaxPossibleGasNoSignature(
@@ -558,7 +563,10 @@ export class RelayServer extends EventEmitter {
 
     await this.validateRequestWithVerifier(envelopingTransaction);
 
-    await validateIfGasAmountIsAcceptable(envelopingTransaction);
+    await validateIfGasAmountIsAcceptable(
+      envelopingTransaction,
+      this.config.app
+    );
 
     const { maxPossibleGas, maxPossibleGasWithFee } =
       await this.getMaxPossibleGas(envelopingTransaction);

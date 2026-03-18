@@ -1,14 +1,16 @@
 import {
-  estimateInternalCallGas,
-  isDeployRequest,
+    estimateInternalCallGas,
+    isDeployRequest,
 } from '@rsksmart/rif-relay-client';
 import { BigNumber as BigNumberJs } from 'bignumber.js';
 import type { HttpEnvelopingRequest, RelayRequestBody } from '../definitions';
 import { MAX_ESTIMATED_GAS_DEVIATION } from '../definitions/server.const';
+import type { AppConfig } from '../ServerConfigParams';
+import { isSponsorshipAllowed } from './isSponsorshipAllowed';
 
 export async function validateIfGasAmountIsAcceptable({
   relayRequest,
-}: HttpEnvelopingRequest) {
+}: HttpEnvelopingRequest, appConfig: AppConfig) {
   // The maxPossibleGas must be compared against the commitment signed with the user.
   // The relayServer must not allow a call that requires more gas than it was agreed with the user
   // For now, we can call estimateDestinationContractCallGas to get the "ACTUAL" gas required for the
@@ -19,6 +21,10 @@ export async function validateIfGasAmountIsAcceptable({
   // and not the current hardcoded deviation
 
   if (isDeployRequest(relayRequest)) {
+    return;
+  }
+
+  if (isSponsorshipAllowed(relayRequest, appConfig)) {
     return;
   }
 
